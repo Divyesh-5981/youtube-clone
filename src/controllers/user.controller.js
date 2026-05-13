@@ -1,3 +1,6 @@
+import jwt from "jsonwebtoken";
+
+import { COOKIE_OPTIONS } from "../constants.js";
 import { User } from "../models/user.model.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
@@ -122,15 +125,10 @@ const loginUser = asyncHandler(async (req, res) => {
   delete loggedInUser.password;
   delete loggedInUser.refreshToken;
 
-  const cookieOptions = {
-    httpOnly: true,
-    secure: true,
-  };
-
   res
     .status(200)
-    .cookie("accessToken", accessToken, cookieOptions)
-    .cookie("refreshToken", refreshToken, cookieOptions)
+    .cookie("accessToken", accessToken, COOKIE_OPTIONS)
+    .cookie("refreshToken", refreshToken, COOKIE_OPTIONS)
     .json(
       new ApiResponse(
         200,
@@ -167,17 +165,55 @@ const logoutUser = asyncHandler(async (req, res) => {
   );
 
   // 3. Secure Cookie Clearing
-  const cookieOptions = {
-    httpOnly: true,
-    secure: true,
-  };
 
   // 4. Guaranteed Response
   // We clear the cookies and send a JSON confirmation back to the client.
   res
-    .clearCookie("accessToken", cookieOptions)
-    .clearCookie("refreshToken", cookieOptions)
+    .clearCookie("accessToken", COOKIE_OPTIONS)
+    .clearCookie("refreshToken", COOKIE_OPTIONS)
     .json(new ApiResponse(200, {}, "User logged out successfully"));
 });
 
-export { registerUser, loginUser, logoutUser };
+// Refresh Token Rotation pattern
+const refreshAccessToken = asyncHandler(async (req, res) => {
+  // 1. Get token from cookies only for better XSS protection 🛡️
+  const refreshToken = req.cookies?.refreshToken;
+
+  if (!refreshToken) {
+    throw new ApiError(401, "No refresh token provided");
+  }
+
+  try {
+    // 2. Verify the token 🔑
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+
+    // 3. Find user and check if this specific token is still valid
+    const user = await User.findById(decoded._id);
+
+    // Potential reuse detected or user deleted ⚠️
+    if (!user || refreshToken !== user.refreshToken) {
+      throw new ApiError(401, "Refresh token is expired or invalid");
+    }
+
+    // 4. Generate a fresh pair of tokens (Rotation) 🔄
+    const { accessToken, refreshToken: newRefreshToken } =
+      await generateAccessAndRefreshTokens(user._id);
+
+    res
+      .status(200)
+      .cookie("accessToken", accessToken, COOKIE_OPTIONS)
+      .cookie("refreshToken", newRefreshToken, COOKIE_OPTIONS)
+      .json(
+        new ApiResponse(
+          200,
+          { accessToken, refreshToken: newRefreshToken },
+          "Access token refreshed"
+        )
+      );
+  } catch (error) {
+    // Catch JWT-specific errors (like TokenExpiredError)
+    throw new ApiError(401, error?.message || "Invalid refresh token");
+  }
+});
+
+export { registerUser, loginUser, logoutUser, refreshAccessToken };
