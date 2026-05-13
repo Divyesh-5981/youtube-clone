@@ -4,6 +4,34 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 
+const generateAccessAndRefreshTokens = async (userId) => {
+  try {
+    // find the user by userId
+    const user = await User.findById(userId);
+
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    const accessToken = user.generateAccessToken();
+    const refreshToken = user.generateRefreshToken();
+
+    user.refreshToken = refreshToken;
+
+    await user.save({ validateBeforeSave: false });
+
+    return { accessToken, refreshToken };
+  } catch (error) {
+    // If it's already an ApiError, preserve the original status and message
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    // Only wrap truly unexpected errors
+    console.error("Internal server error during token generation", error);
+    throw new ApiError(500, "Internal server error during token generation");
+  }
+};
+
 const registerUser = asyncHandler(async (req, res) => {
   const { userName, fullName, email, password } = req.body;
 
@@ -14,7 +42,7 @@ const registerUser = asyncHandler(async (req, res) => {
 
   // Check for duplicate userName or email
   const existedUser = await User.findOne({
-    $or: [{ userName }, { email }],
+    $or: [{ userName: userName.toLowerCase() }, { email }],
   });
 
   if (existedUser) {
@@ -60,4 +88,96 @@ const registerUser = asyncHandler(async (req, res) => {
     .json(new ApiResponse(201, createdUser, "User registered successfully"));
 });
 
-export { registerUser };
+const loginUser = asyncHandler(async (req, res) => {
+  // Take the user information from request body
+  const { userName, email, password } = req.body;
+
+  // Validate the user by email or userName or password
+  if (!password || (!userName && !email)) {
+    throw new ApiError(400, "Username/Email and password are required");
+  }
+
+  // Find the user in the database
+  const user = await User.findOne({
+    $or: [{ email: email.toLowerCase() }, { userName }],
+  });
+
+  if (!user) {
+    throw new ApiError(401, "Invalid user credentials");
+  }
+
+  // Check if the password is correct
+  const isPasswordValid = await user.isPasswordCorrect(password);
+
+  if (!isPasswordValid) {
+    throw new ApiError(401, "Invalid user credentials");
+  }
+
+  // Generate access and refresh tokens
+  const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
+    user._id
+  );
+
+  const loggedInUser = user.toObject();
+  delete loggedInUser.password;
+  delete loggedInUser.refreshToken;
+
+  const cookieOptions = {
+    httpOnly: true,
+    secure: true,
+  };
+
+  res
+    .status(200)
+    .cookie("accessToken", accessToken, cookieOptions)
+    .cookie("refreshToken", refreshToken, cookieOptions)
+    .json(
+      new ApiResponse(
+        200,
+        {
+          user: loggedInUser,
+          accessToken,
+          refreshToken,
+        },
+        "User logged in successfully"
+      )
+    );
+});
+
+// Secure routes
+const logoutUser = asyncHandler(async (req, res) => {
+  // 1. Defensive Check
+  // Even though verifyJWT should provide req.user,
+  // checking it here prevents crashes if the middleware is ever changed.
+  if (!req.user?._id) {
+    throw new ApiError(401, "Unauthorized: User information missing");
+  }
+
+  const user = req.user;
+
+  // 2. Precise Database Update
+  // We use $unset to completely remove the field or $set to null.
+  // This invalidates the refresh token on the server side.
+  await User.findByIdAndUpdate(
+    user._id,
+    {
+      $set: { refreshToken: null },
+    },
+    { new: true }
+  );
+
+  // 3. Secure Cookie Clearing
+  const cookieOptions = {
+    httpOnly: true,
+    secure: true,
+  };
+
+  // 4. Guaranteed Response
+  // We clear the cookies and send a JSON confirmation back to the client.
+  res
+    .clearCookie("accessToken", cookieOptions)
+    .clearCookie("refreshToken", cookieOptions)
+    .json(new ApiResponse(200, {}, "User logged out successfully"));
+});
+
+export { registerUser, loginUser, logoutUser };

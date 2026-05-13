@@ -18,10 +18,10 @@ app.use(express.urlencoded({ extended: true, limit: "20kb" }));
 app.use(express.static("public"));
 app.use(cookieParser());
 
-// Global error handler (must be registered after routes)
-app.use(errorHandler);
-
 // /users is prefix
 app.use("/users", userRoute);
+
+// Global error handler (must be registered after routes)
+app.use(errorHandler);
 
 export default app;
