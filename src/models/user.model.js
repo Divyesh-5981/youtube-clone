@@ -2,7 +2,7 @@ import { compare, hash } from "bcrypt";
 import jwt from "jsonwebtoken";
 import { Schema, model } from "mongoose";
 
-import { SALT } from "../constants";
+import { SALT } from "../constants.js";
 
 const userSchema = new Schema(
   {
@@ -51,8 +51,8 @@ const userSchema = new Schema(
   { timestamps: true }
 );
 
-userSchema.pre("save", async function (next) {
-  if (!this.isModified(this.password)) return next();
+userSchema.pre("save", async function () {
+  if (!this.isModified("password")) return;
 
   this.password = await hash(this.password, SALT);
 });

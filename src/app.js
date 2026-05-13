@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 
 import { errorHandler } from "./middlewares/errorHandler.middleware.js";
+import userRoute from "./routes/user.route.js";
 
 const app = express();
 
@@ -19,5 +20,8 @@ app.use(cookieParser());
 
 // Global error handler (must be registered after routes)
 app.use(errorHandler);
+
+// /users is prefix
+app.use("/users", userRoute);
 
 export default app;
